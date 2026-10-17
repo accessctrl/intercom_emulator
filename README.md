@@ -1,7 +1,14 @@
 # intercom_emulator
 
-flutter run -d RZCT90SSQLX
+flutter run -d RZCT90SSQLX --dart-define-from-file=.secrets.local.json
 flutter attach -d RZCT90SSQLX
+
+Note: `flutter attach` works only when an app is already running on device.
+
+Quick checks when websocket is not connecting:
+- Start with `--dart-define-from-file=.secrets.local.json` so `HUB_KEY` is loaded.
+- Ensure `EMU_FAMILY` + `EMU_SERIAL` exactly match an active staging hub/controller identity.
+- If server logs show many `GET /... 404`, it is usually bot traffic and is unrelated to `/api/cloud/hub/ws`.
 
 Flutter Android emulator for IGC intercom backend protocol.
 

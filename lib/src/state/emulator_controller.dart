@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/hub_command.dart';
 import '../models/hub_config.dart';
@@ -7,6 +11,10 @@ import '../services/app_logger.dart';
 import '../services/command_emulator.dart';
 import '../services/hub_ws_client.dart';
 import '../services/webrtc_manager.dart';
+
+enum IntercomCallState { idle, calling, connected }
+
+const int _outgoingCallDurationSec = 30;
 
 class EmulatorController extends ChangeNotifier {
   EmulatorController({
@@ -55,9 +63,46 @@ class EmulatorController extends ChangeNotifier {
   String _lastEventMessage = 'No server events yet';
   String get lastEventMessage => _lastEventMessage;
 
+  String _dialedApartment = '';
+  String get dialedApartment => _dialedApartment;
+
+  IntercomCallState _callState = IntercomCallState.idle;
+  IntercomCallState get callState => _callState;
+
+  bool _doorUnlocked = false;
+  bool get isDoorUnlocked => _doorUnlocked;
+
+  Timer? _doorUnlockTimer;
+  Timer? _callTimer;
+  Timer? _ringSignalTimer;
+
+  int _callSecondsRemaining = 0;
+  int get callSecondsRemaining => _callSecondsRemaining;
+
+  bool get isPreviewInitialized => _webRtcManager.isInitialized;
+  RTCVideoRenderer? get localPreviewRenderer => _webRtcManager.localRenderer;
+
+  bool get canStartCall =>
+      _dialedApartment.isNotEmpty && _callState == IntercomCallState.idle;
+
+  String get deviceLabel {
+    final serial = _config.serial.trim();
+    if (serial.isEmpty) {
+      return 'UNKNOWN';
+    }
+    return serial.toUpperCase();
+  }
+
   bool get isConnected =>
       _connectionState == HubConnectionState.connected ||
       _connectionState == HubConnectionState.authenticated;
+
+  Future<String> toggleConnection() {
+    if (isConnected || _connectionState == HubConnectionState.connecting) {
+      return disconnect();
+    }
+    return connect();
+  }
 
   Future<void> load() async {
     final loaded = await _configStore.load();
@@ -123,8 +168,84 @@ class EmulatorController extends ChangeNotifier {
 
   Future<String> disconnect() async {
     await _client.disconnect();
+    _stopCallLifecycle(resetState: true);
     _connectionState = HubConnectionState.disconnected;
     _markAction('Disconnected');
+    notifyListeners();
+    return _lastActionMessage;
+  }
+
+  void appendDialCharacter(String character) {
+    if (_callState != IntercomCallState.idle) {
+      return;
+    }
+    if (character.isEmpty) {
+      return;
+    }
+    if (character != '*' && int.tryParse(character) == null) {
+      return;
+    }
+    if (_dialedApartment.length >= 12) {
+      _markAction('Apartment number max length reached');
+      notifyListeners();
+      return;
+    }
+    _dialedApartment = '$_dialedApartment$character';
+    _markAction('Dialed apartment: $_dialedApartment');
+    notifyListeners();
+  }
+
+  void removeLastDialCharacter() {
+    if (_callState != IntercomCallState.idle) {
+      return;
+    }
+    if (_dialedApartment.isEmpty) {
+      return;
+    }
+    _dialedApartment = _dialedApartment.substring(
+      0,
+      _dialedApartment.length - 1,
+    );
+    _markAction(
+      _dialedApartment.isEmpty
+          ? 'Apartment number cleared'
+          : 'Dialed apartment: $_dialedApartment',
+    );
+    notifyListeners();
+  }
+
+  Future<String> startCall() async {
+    if (!canStartCall) {
+      final reason = _dialedApartment.isEmpty
+          ? 'apartment number is empty'
+          : 'another call is already in progress';
+      _markAction('Call not started: $reason');
+      notifyListeners();
+      return _lastActionMessage;
+    }
+
+    await initializeLocalMedia();
+    if (!isPreviewInitialized) {
+      _markAction('Call not started: camera/microphone permission required');
+      notifyListeners();
+      return _lastActionMessage;
+    }
+
+    _callState = IntercomCallState.calling;
+    _startCallLifecycle();
+
+    final sent = _client.sendEvent(
+      eventType: 'intercom_call_start',
+      body: <String, dynamic>{
+        'apartment': _dialedApartment,
+        'device_serial': _config.serial.trim(),
+      },
+    );
+
+    final message = sent
+        ? 'Call started for apartment $_dialedApartment'
+        : 'Call prepared for apartment $_dialedApartment (offline websocket)';
+    _markAction(message);
     notifyListeners();
     return _lastActionMessage;
   }
@@ -165,6 +286,8 @@ class EmulatorController extends ChangeNotifier {
       details: '${command.type} id=${command.id}',
     );
 
+    await _applyRuntimeState(command);
+
     final result = await _commandEmulator.execute(command);
     if (result.status == 'unsupported') {
       _unsupportedCommands += 1;
@@ -181,6 +304,10 @@ class EmulatorController extends ChangeNotifier {
 
   void _onConnectionStateChanged(HubConnectionState state, {String? error}) {
     _connectionState = state;
+    if (state == HubConnectionState.disconnected ||
+        state == HubConnectionState.failed) {
+      _stopCallLifecycle(resetState: true);
+    }
     _markAction('Connection state: ${_stateToText(state)}');
     if (error != null && error.isNotEmpty) {
       _lastError = error;
@@ -217,6 +344,112 @@ class EmulatorController extends ChangeNotifier {
     _logger.info('Action', details: message);
   }
 
+  Future<void> _applyRuntimeState(HubCommand command) async {
+    final type = command.type.trim().toLowerCase();
+
+    if (type == 'door_open' || type == 'unlock') {
+      _pulseDoorUnlock();
+      _markAction('Door unlock command received');
+      return;
+    }
+
+    if (type == 'call_answered' ||
+        type == 'call_accept' ||
+        type == 'audio_start' ||
+        type == 'voice_start') {
+      _callState = IntercomCallState.connected;
+      _stopCallLifecycle(resetState: false);
+      _markAction('Two-way audio started by remote side');
+      await SystemSound.play(SystemSoundType.click);
+      return;
+    }
+
+    if (type == 'call_declined' ||
+        type == 'call_end' ||
+        type == 'hangup' ||
+        type == 'audio_stop' ||
+        type == 'voice_stop') {
+      _stopCallLifecycle(resetState: true);
+      _markAction('Call ended by remote side');
+      return;
+    }
+
+    if (type == 'monitor_start' || type == 'view_start') {
+      await initializeLocalMedia();
+      _markAction('Remote monitor session started');
+      return;
+    }
+  }
+
+  void _pulseDoorUnlock() {
+    _doorUnlockTimer?.cancel();
+    _doorUnlocked = true;
+    notifyListeners();
+    SystemSound.play(SystemSoundType.alert);
+    _doorUnlockTimer = Timer(const Duration(seconds: 3), () {
+      _doorUnlocked = false;
+      notifyListeners();
+    });
+  }
+
+  void _startCallLifecycle() {
+    _callTimer?.cancel();
+    _ringSignalTimer?.cancel();
+
+    _callSecondsRemaining = _outgoingCallDurationSec;
+    _playRingingTick();
+
+    _ringSignalTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_callState == IntercomCallState.calling) {
+        _playRingingTick();
+      }
+    });
+
+    _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_callState != IntercomCallState.calling) {
+        timer.cancel();
+        return;
+      }
+
+      if (_callSecondsRemaining <= 1) {
+        timer.cancel();
+        _ringSignalTimer?.cancel();
+        _callSecondsRemaining = 0;
+        _callState = IntercomCallState.idle;
+        _client.sendEvent(
+          eventType: 'intercom_call_timeout',
+          body: <String, dynamic>{
+            'apartment': _dialedApartment,
+            'device_serial': _config.serial.trim(),
+          },
+        );
+        _markAction('Call timeout (${_outgoingCallDurationSec}s)');
+        notifyListeners();
+        return;
+      }
+
+      _callSecondsRemaining -= 1;
+      notifyListeners();
+    });
+  }
+
+  void _stopCallLifecycle({required bool resetState}) {
+    _callTimer?.cancel();
+    _callTimer = null;
+    _ringSignalTimer?.cancel();
+    _ringSignalTimer = null;
+
+    _callSecondsRemaining = 0;
+    if (resetState) {
+      _callState = IntercomCallState.idle;
+    }
+  }
+
+  void _playRingingTick() {
+    SystemSound.play(SystemSoundType.alert);
+    HapticFeedback.selectionClick();
+  }
+
   String _stateToText(HubConnectionState state) {
     return switch (state) {
       HubConnectionState.disconnected => 'disconnected',
@@ -241,6 +474,9 @@ class EmulatorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _doorUnlockTimer?.cancel();
+    _callTimer?.cancel();
+    _ringSignalTimer?.cancel();
     _client.disconnect();
     _webRtcManager.dispose();
     _logger.dispose();

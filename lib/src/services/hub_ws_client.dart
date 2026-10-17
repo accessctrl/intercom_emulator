@@ -43,6 +43,7 @@ class HubWsClient {
   HubConfig? _config;
   Timer? _statusTimer;
   bool _isClosedByClient = false;
+  bool _didEmitDisconnected = false;
   int _serverTimeOffsetSec = 0;
   bool _authRetriedAfterSkew = false;
 
@@ -53,6 +54,7 @@ class HubWsClient {
 
     _config = config;
     _isClosedByClient = false;
+    _didEmitDisconnected = false;
     _emitState(HubConnectionState.connecting);
 
     final wsUrl = _buildWsUrl(config.baseUrl);
@@ -77,7 +79,17 @@ class HubWsClient {
         onDone: () {
           final code = socket.closeCode;
           final reason = socket.closeReason;
-          _onWarning('WebSocket closed', details: 'code=$code reason=$reason');
+          if (_isClosedByClient) {
+            _onInfo(
+              'WebSocket closed after client disconnect',
+              details: 'code=$code reason=$reason',
+            );
+          } else {
+            _onWarning(
+              'WebSocket closed',
+              details: 'code=$code reason=$reason',
+            );
+          }
           _cleanupAfterClose();
           if (!_isClosedByClient) {
             _emitState(
@@ -85,7 +97,7 @@ class HubWsClient {
               error: 'Connection closed by server',
             );
           } else {
-            _emitState(HubConnectionState.disconnected);
+            _emitDisconnectedOnce();
           }
         },
       );
@@ -101,6 +113,7 @@ class HubWsClient {
 
   Future<void> disconnect() async {
     _isClosedByClient = true;
+    _didEmitDisconnected = false;
     _statusTimer?.cancel();
     _statusTimer = null;
 
@@ -110,7 +123,7 @@ class HubWsClient {
     if (socket != null) {
       _emitState(HubConnectionState.closing);
       await socket.close(1000, 'Client disconnect');
-      _emitState(HubConnectionState.disconnected);
+      _emitDisconnectedOnce();
       _onInfo('Client disconnect completed');
     }
   }
@@ -139,6 +152,20 @@ class HubWsClient {
     return _sendJson(<String, dynamic>{
       'type': 'command_results',
       'results': results,
+    });
+  }
+
+  bool sendEvent({required String eventType, Map<String, dynamic>? body}) {
+    final trimmedType = eventType.trim();
+    if (trimmedType.isEmpty) {
+      _onWarning('Skipping event send: empty event type');
+      return false;
+    }
+
+    return _sendJson(<String, dynamic>{
+      'type': 'events',
+      'event_type': trimmedType,
+      'body': body ?? const <String, dynamic>{},
     });
   }
 
@@ -346,6 +373,14 @@ class HubWsClient {
 
   void _emitState(HubConnectionState state, {String? error}) {
     _onStateChanged(state, error: error);
+  }
+
+  void _emitDisconnectedOnce() {
+    if (_didEmitDisconnected) {
+      return;
+    }
+    _didEmitDisconnected = true;
+    _emitState(HubConnectionState.disconnected);
   }
 
   String _buildWsUrl(String baseUrl) {

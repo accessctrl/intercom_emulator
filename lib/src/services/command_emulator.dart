@@ -48,6 +48,27 @@ class CommandEmulator {
       );
     }
 
+    if (type == 'call_answered' ||
+        type == 'call_accept' ||
+        type == 'audio_start' ||
+        type == 'voice_start' ||
+        type == 'call_declined' ||
+        type == 'call_end' ||
+        type == 'hangup' ||
+        type == 'audio_stop' ||
+        type == 'voice_stop' ||
+        type == 'monitor_start' ||
+        type == 'view_start' ||
+        type == 'monitor_stop' ||
+        type == 'view_stop') {
+      return CommandExecutionResult(
+        commandId: command.id,
+        status: 'ok',
+        responseHex: '9000',
+        msgType: _readMsgType(command),
+      );
+    }
+
     // Current backend command types are low-level controller tunnel packets.
     // They are acknowledged here but intentionally marked unsupported by this emulator.
     if (type == 'tunnel_packet' ||

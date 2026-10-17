@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../models/hub_config.dart';
 import '../models/log_entry.dart';
@@ -20,6 +21,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final TextEditingController _serialController;
   late final TextEditingController _firmwareController;
   late final TextEditingController _statusIntervalController;
+  int _selectedTabIndex = 0;
 
   @override
   void initState() {
@@ -52,33 +54,65 @@ class _HomeScreenState extends State<HomeScreen> {
         final controller = widget.controller;
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Intercom Emulator'),
+            title: const Text('IGC Intercom'),
             actions: <Widget>[
-              IconButton(
-                tooltip: 'Initialize camera/microphone',
-                onPressed: controller.initializeLocalMedia,
-                icon: const Icon(Icons.videocam),
+              TextButton.icon(
+                onPressed: () async {
+                  final message = await controller.toggleConnection();
+                  if (!mounted) {
+                    return;
+                  }
+                  _showSnack(message);
+                },
+                icon: Icon(
+                  Icons.wifi,
+                  color: controller.isConnected
+                      ? Colors.green.shade700
+                      : Theme.of(context).colorScheme.onSurface,
+                ),
+                label: Text(
+                  controller.isConnected ? 'Disconnect' : 'Connect',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
               ),
             ],
           ),
-          body: DefaultTabController(
-            length: 3,
-            child: Column(
+          body: SafeArea(
+            bottom: true,
+            child: IndexedStack(
+              index: _selectedTabIndex,
               children: <Widget>[
-                const TabBar(
-                  tabs: <Tab>[
-                    Tab(text: 'Session'),
-                    Tab(text: 'Settings'),
-                    Tab(text: 'Logs'),
-                  ],
-                ),
+                _buildSessionTab(controller),
+                _buildSettingsTab(controller),
+                _buildLogsTab(controller),
+              ],
+            ),
+          ),
+          bottomNavigationBar: SafeArea(
+            top: false,
+            minimum: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Row(
+              children: <Widget>[
                 Expanded(
-                  child: TabBarView(
-                    children: <Widget>[
-                      _buildSessionTab(controller),
-                      _buildSettingsTab(controller),
-                      _buildLogsTab(controller),
-                    ],
+                  child: _bottomTabButton(
+                    index: 0,
+                    icon: Icons.grid_view_rounded,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _bottomTabButton(
+                    index: 1,
+                    icon: Icons.tune_rounded,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _bottomTabButton(
+                    index: 2,
+                    icon: Icons.article_outlined,
                   ),
                 ),
               ],
@@ -90,90 +124,248 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSessionTab(EmulatorController controller) {
-    final state = controller.connectionState;
-    final statusText = switch (state) {
-      HubConnectionState.disconnected => 'Disconnected',
-      HubConnectionState.connecting => 'Connecting',
-      HubConnectionState.connected => 'Connected (awaiting auth)',
-      HubConnectionState.authenticated => 'Authenticated',
-      HubConnectionState.closing => 'Closing',
-      HubConnectionState.failed => 'Failed',
-    };
+    final apartmentText = controller.dialedApartment.isEmpty
+        ? '-'
+        : controller.dialedApartment;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: <Widget>[
-            FilledButton(
-              onPressed: () async {
-                final message = await controller.connect();
-                if (!mounted) {
-                  return;
-                }
-                _showSnack(message);
-              },
-              child: const Text('Connect'),
+    final keypad = <String>[
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+      '*',
+      '0',
+      'backspace',
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final keypadHeight = (constraints.maxHeight * 0.20)
+          .clamp(92.0, 130.0)
+            .toDouble();
+        final previewHeight = (constraints.maxHeight -
+            (44 + 8 + keypadHeight + 8 + 40 + 8 + 20))
+            .clamp(120.0, 320.0)
+            .toDouble();
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              children: <Widget>[
+              SizedBox(
+                height: previewHeight,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .surfaceContainerLowest,
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: _buildCameraPreview(controller),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      child: Text(
+                        apartmentText,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.headlineSmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      color: controller.isDoorUnlocked
+                          ? Colors.green.shade50
+                          : Colors.red.shade50,
+                      border: Border.all(
+                        color: controller.isDoorUnlocked
+                            ? Colors.green.shade300
+                            : Colors.red.shade300,
+                      ),
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          controller.isDoorUnlocked
+                              ? Icons.lock_open
+                              : Icons.lock,
+                          size: 16,
+                          color: controller.isDoorUnlocked
+                              ? Colors.green.shade700
+                              : Colors.red.shade700,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          controller.isDoorUnlocked ? 'Open' : 'Locked',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: keypadHeight,
+                child: GridView.builder(
+                  itemCount: keypad.length,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 6,
+                    childAspectRatio: 2.8,
+                  ),
+                  itemBuilder: (context, index) {
+                    final key = keypad[index];
+                    return _dialButton(
+                      key,
+                      onTap: () {
+                        if (key == 'backspace') {
+                          controller.removeLastDialCharacter();
+                        } else {
+                          controller.appendDialCharacter(key);
+                        }
+                      },
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(40),
+                  backgroundColor: Colors.green.shade100,
+                  foregroundColor: Colors.green.shade900,
+                ),
+                onPressed: controller.canStartCall
+                    ? () async {
+                        final message = await controller.startCall();
+                        if (!mounted) {
+                          return;
+                        }
+                        _showSnack(message);
+                      }
+                    : null,
+                icon: const Icon(Icons.call, size: 18),
+                label: const Text('Call'),
+              ),
+              const SizedBox(height: 6),
+                Text(
+                  '${_callStateText(controller)} · Device ${controller.deviceLabel}',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ),
-            OutlinedButton(
-              onPressed: () async {
-                final message = await controller.disconnect();
-                if (!mounted) {
-                  return;
-                }
-                _showSnack(message);
-              },
-              child: const Text('Disconnect'),
-            ),
-            OutlinedButton(
-              onPressed: () {
-                final message = controller.sendStatusNow();
-                _showSnack(message);
-              },
-              child: const Text('Send Status'),
-            ),
-            OutlinedButton(
-              onPressed: () {
-                final message = controller.requestPull();
-                _showSnack(message);
-              },
-              child: const Text('Pull Commands'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        _sessionInfoCard(
-          title: 'Last action',
-          value: controller.lastActionMessage,
-          icon: Icons.bolt,
-        ),
-        const SizedBox(height: 8),
-        _sessionInfoCard(
-          title: 'Last event',
-          value: controller.lastEventMessage,
-          icon: Icons.wifi_tethering,
-        ),
-        const SizedBox(height: 12),
-        Text('State: $statusText'),
-        const SizedBox(height: 8),
-        Text('Commands handled: ${controller.commandsHandled}'),
-        const SizedBox(height: 4),
-        Text('Unsupported commands: ${controller.unsupportedCommands}'),
-        if (controller.lastError != null &&
-            controller.lastError!.isNotEmpty) ...<Widget>[
-          const SizedBox(height: 12),
-          Text(
-            'Last error: ${controller.lastError}',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
-        ],
-        const SizedBox(height: 16),
-        const Text(
-          'Current implementation intentionally reports tunnel_* commands as unsupported. '
-          'This reflects the current backend gap for end-user intercom call/WebRTC runtime APIs.',
+        );
+      },
+    );
+  }
+
+  Widget _bottomTabButton({
+    required int index,
+    required IconData icon,
+  }) {
+    final selected = _selectedTabIndex == index;
+    return FilledButton.tonal(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size.fromHeight(40),
+        backgroundColor: selected
+            ? Theme.of(context).colorScheme.primaryContainer
+            : Theme.of(context).colorScheme.surfaceContainerHigh,
+        foregroundColor: selected
+            ? Theme.of(context).colorScheme.onPrimaryContainer
+            : Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      onPressed: () {
+        setState(() {
+          _selectedTabIndex = index;
+        });
+      },
+      child: Icon(icon, size: 20),
+    );
+  }
+
+  Widget _dialButton(String key, {required VoidCallback onTap}) {
+    final isBackspace = key == 'backspace';
+    return FilledButton.tonal(
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      onPressed: onTap,
+      child: isBackspace
+          ? const Icon(Icons.backspace_outlined, size: 18)
+          : Text(
+              key,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+    );
+  }
+
+  Widget _buildCameraPreview(EmulatorController controller) {
+    final renderer = controller.localPreviewRenderer;
+    final shouldShowVideo =
+        controller.isPreviewInitialized &&
+        renderer != null &&
+        controller.callState != IntercomCallState.idle;
+
+    if (shouldShowVideo) {
+      return RTCVideoView(
+        renderer,
+        mirror: true,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      );
+    }
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        Icon(
+          Icons.photo_camera_outlined,
+          size: 26,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
+        const SizedBox(height: 4),
+        Text('Camera preview', style: Theme.of(context).textTheme.bodyMedium),
       ],
     );
   }
@@ -353,6 +545,15 @@ class _HomeScreenState extends State<HomeScreen> {
       LogLevel.info => 'INFO',
       LogLevel.warning => 'WARN',
       LogLevel.error => 'ERROR',
+    };
+  }
+
+  String _callStateText(EmulatorController controller) {
+    return switch (controller.callState) {
+      IntercomCallState.idle => 'Idle',
+      IntercomCallState.calling =>
+        'Calling ${controller.callSecondsRemaining}s',
+      IntercomCallState.connected => 'Audio connected',
     };
   }
 }
