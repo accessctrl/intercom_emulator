@@ -103,10 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: _bottomTabButton(
-                    index: 1,
-                    icon: Icons.tune_rounded,
-                  ),
+                  child: _bottomTabButton(index: 1, icon: Icons.tune_rounded),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -145,32 +142,33 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-      const keypadColumns = 3;
-      const keypadRows = 4;
-      const keypadSpacing = 6.0;
-      const keypadAspect = 2.8;
-      // Keep vertical math aligned with real paddings to avoid bottom overflow.
-      const contentVerticalPadding = 14.0; // 10 top + 4 bottom
-      const contentVerticalGaps = 22.0; // 8 + 8 + 6
-      const infoRowHeight = 44.0;
+        const keypadColumns = 3;
+        const keypadRows = 4;
+        const keypadSpacing = 6.0;
+        const keypadAspect = 2.8;
+        // Keep vertical math aligned with real paddings to avoid bottom overflow.
+        const contentVerticalPadding = 14.0; // 10 top + 4 bottom
+        const contentVerticalGaps = 22.0; // 8 + 8 + 6
+        const infoRowHeight = 44.0;
 
-      final contentWidth =
-        (constraints.maxWidth - 24).clamp(0.0, double.infinity);
-      final buttonWidth =
-        (contentWidth - (keypadColumns - 1) * keypadSpacing) /
-        keypadColumns;
-      final buttonHeight = buttonWidth / keypadAspect;
-      final keypadHeight =
-        (buttonHeight * keypadRows) + (keypadRows - 1) * keypadSpacing;
+        final contentWidth = (constraints.maxWidth - 24).clamp(
+          0.0,
+          double.infinity,
+        );
+        final buttonWidth =
+            (contentWidth - (keypadColumns - 1) * keypadSpacing) /
+            keypadColumns;
+        final buttonHeight = buttonWidth / keypadAspect;
+        final keypadHeight =
+            (buttonHeight * keypadRows) + (keypadRows - 1) * keypadSpacing;
 
-      final innerHeight =
-        (constraints.maxHeight - contentVerticalPadding)
-          .clamp(0.0, double.infinity)
-          .toDouble();
-      final previewHeight = (innerHeight -
-          (keypadHeight + infoRowHeight + contentVerticalGaps))
-        .clamp(96.0, innerHeight)
-        .toDouble();
+        final innerHeight = (constraints.maxHeight - contentVerticalPadding)
+            .clamp(0.0, double.infinity)
+            .toDouble();
+        final previewHeight =
+            (innerHeight - (keypadHeight + infoRowHeight + contentVerticalGaps))
+                .clamp(96.0, innerHeight)
+                .toDouble();
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
@@ -300,10 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _bottomTabButton({
-    required int index,
-    required IconData icon,
-  }) {
+  Widget _bottomTabButton({required int index, required IconData icon}) {
     final selected = _selectedTabIndex == index;
     return FilledButton.tonal(
       style: FilledButton.styleFrom(
