@@ -15,6 +15,11 @@ import '../services/webrtc_manager.dart';
 enum IntercomCallState { idle, calling, connected }
 
 const int _outgoingCallDurationSec = 30;
+const List<Map<String, dynamic>> _defaultIceServers = [
+  {
+    'urls': ['stun:stun.l.google.com:19302'],
+  },
+];
 
 class EmulatorController extends ChangeNotifier {
   EmulatorController({
@@ -78,6 +83,9 @@ class EmulatorController extends ChangeNotifier {
 
   int _callSecondsRemaining = 0;
   int get callSecondsRemaining => _callSecondsRemaining;
+
+  String _activeCallId = '';
+  List<Map<String, dynamic>> _activeIceServers = _defaultIceServers;
 
   bool get isPreviewInitialized => _webRtcManager.isInitialized;
   RTCVideoRenderer? get localPreviewRenderer => _webRtcManager.localRenderer;
@@ -168,6 +176,8 @@ class EmulatorController extends ChangeNotifier {
 
   Future<String> disconnect() async {
     await _client.disconnect();
+    await _webRtcManager.endPeerConnection();
+    _activeCallId = '';
     _stopCallLifecycle(resetState: true);
     _connectionState = HubConnectionState.disconnected;
     _markAction('Disconnected');
@@ -248,6 +258,77 @@ class EmulatorController extends ChangeNotifier {
     _markAction(message);
     notifyListeners();
     return _lastActionMessage;
+  }
+
+  Future<void> _ensurePeerForCall({
+    required String callId,
+    List<Map<String, dynamic>>? iceServers,
+  }) async {
+    if (callId.isNotEmpty &&
+        _activeCallId.isNotEmpty &&
+        _activeCallId != callId) {
+      await _webRtcManager.endPeerConnection();
+      _activeCallId = '';
+    }
+
+    if (callId.isNotEmpty) {
+      _activeCallId = callId;
+    }
+
+    final nextIceServers = (iceServers != null && iceServers.isNotEmpty)
+        ? iceServers
+        : _activeIceServers;
+    _activeIceServers = nextIceServers.isNotEmpty
+        ? nextIceServers
+        : _defaultIceServers;
+
+    await _webRtcManager.ensurePeerConnection(
+      iceServers: _activeIceServers,
+      onCandidate: (candidate) async {
+        if (_activeCallId.isEmpty) return;
+        final sent = _client.sendEvent(
+          eventType: 'intercom_webrtc_signal',
+          body: <String, dynamic>{
+            'call_id': _activeCallId,
+            'signal_type': 'ice_candidate',
+            'signal': candidate,
+            'device_id': _config.serial.trim(),
+          },
+        );
+        if (!sent) {
+          _handleWarning(
+            'ICE candidate send skipped',
+            details: 'callId=$_activeCallId',
+          );
+        }
+      },
+      onConnectionState: (state) {
+        _handleInfo(
+          'Peer connection state',
+          details: '$state callId=$_activeCallId',
+        );
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+          _callState = IntercomCallState.connected;
+          _stopCallLifecycle(resetState: false);
+          _client.sendEvent(
+            eventType: 'intercom_webrtc_signal',
+            body: <String, dynamic>{
+              'call_id': _activeCallId,
+              'signal_type': 'media_ready',
+              'signal': const <String, dynamic>{'state': 'connected'},
+              'device_id': _config.serial.trim(),
+            },
+          );
+          notifyListeners();
+        }
+      },
+      onIceConnectionState: (state) {
+        _handleInfo(
+          'ICE connection state',
+          details: '$state callId=$_activeCallId',
+        );
+      },
+    );
   }
 
   String sendStatusNow() {
@@ -348,7 +429,7 @@ class EmulatorController extends ChangeNotifier {
     final type = command.type.trim().toLowerCase();
 
     if (type == 'webrtc_signal') {
-      _relayWebrtcSignal(command);
+      await _handleWebrtcSignalCommand(command);
       return;
     }
 
@@ -375,6 +456,8 @@ class EmulatorController extends ChangeNotifier {
         type == 'audio_stop' ||
         type == 'voice_stop') {
       _stopCallLifecycle(resetState: true);
+      await _webRtcManager.endPeerConnection();
+      _activeCallId = '';
       _markAction('Call ended by remote side');
       return;
     }
@@ -386,7 +469,7 @@ class EmulatorController extends ChangeNotifier {
     }
   }
 
-  void _relayWebrtcSignal(HubCommand command) {
+  Future<void> _handleWebrtcSignalCommand(HubCommand command) async {
     final payload = command.payload;
     final callId =
         '${payload['call_id'] ?? payload['callId'] ?? payload['request_id'] ?? ''}'
@@ -399,6 +482,13 @@ class EmulatorController extends ChangeNotifier {
     final signal = rawSignal is Map
         ? Map<String, dynamic>.from(rawSignal)
         : <String, dynamic>{};
+    final rawIceServers = signal['ice_servers'];
+    final iceServers = rawIceServers is List
+        ? rawIceServers
+              .whereType<Map>()
+              .map((entry) => Map<String, dynamic>.from(entry))
+              .toList(growable: false)
+        : const <Map<String, dynamic>>[];
 
     if (callId.isEmpty || signalType.isEmpty) {
       _handleWarning(
@@ -408,26 +498,112 @@ class EmulatorController extends ChangeNotifier {
       return;
     }
 
-    final sent = _client.sendEvent(
-      eventType: 'intercom_webrtc_signal',
-      body: <String, dynamic>{
-        'call_id': callId,
-        'signal_type': signalType,
-        'signal': signal,
-        'device_id': _config.serial.trim(),
-      },
-    );
+    await _ensurePeerForCall(callId: callId, iceServers: iceServers);
 
-    if (signalType == 'offer' || signalType == 'answer') {
-      _callState = IntercomCallState.connected;
-      _stopCallLifecycle(resetState: false);
+    if (signalType == 'app_accept') {
+      final offer = await _webRtcManager.createOffer();
+      final sent = _client.sendEvent(
+        eventType: 'intercom_webrtc_signal',
+        body: <String, dynamic>{
+          'call_id': callId,
+          'signal_type': 'offer',
+          'signal': <String, dynamic>{
+            ...offer,
+            'ice_servers': _activeIceServers,
+          },
+          'device_id': _config.serial.trim(),
+        },
+      );
+      _markAction(
+        sent
+            ? 'WebRTC offer sent callId=$callId'
+            : 'WebRTC offer skipped (offline) callId=$callId',
+      );
+      return;
     }
 
-    _markAction(
-      sent
-          ? 'Relayed WebRTC signal: type=$signalType callId=$callId'
-          : 'WebRTC signal relay skipped (offline): type=$signalType callId=$callId',
-    );
+    if (signalType == 'offer') {
+      final sdp = '${signal['sdp'] ?? ''}'.trim();
+      if (sdp.isEmpty) {
+        _handleWarning('Ignoring offer without SDP', details: 'callId=$callId');
+        return;
+      }
+
+      final answer = await _webRtcManager.createAnswerForOffer(sdp);
+      final sent = _client.sendEvent(
+        eventType: 'intercom_webrtc_signal',
+        body: <String, dynamic>{
+          'call_id': callId,
+          'signal_type': 'answer',
+          'signal': answer,
+          'device_id': _config.serial.trim(),
+        },
+      );
+
+      _callState = IntercomCallState.connected;
+      _stopCallLifecycle(resetState: false);
+      _markAction(
+        sent
+            ? 'WebRTC answer sent callId=$callId'
+            : 'WebRTC answer skipped (offline) callId=$callId',
+      );
+      notifyListeners();
+      return;
+    }
+
+    if (signalType == 'answer') {
+      final sdp = '${signal['sdp'] ?? ''}'.trim();
+      if (sdp.isEmpty) {
+        _handleWarning(
+          'Ignoring answer without SDP',
+          details: 'callId=$callId',
+        );
+        return;
+      }
+
+      await _webRtcManager.applyAnswer(sdp);
+      _callState = IntercomCallState.connected;
+      _stopCallLifecycle(resetState: false);
+      _markAction('WebRTC answer applied callId=$callId');
+      notifyListeners();
+      return;
+    }
+
+    if (signalType == 'ice_candidate') {
+      final candidate = '${signal['candidate'] ?? ''}'.trim();
+      if (candidate.isEmpty) {
+        _handleWarning(
+          'Ignoring empty ICE candidate',
+          details: 'callId=$callId',
+        );
+        return;
+      }
+      final sdpMidRaw = signal['sdpMid'];
+      final sdpMLineIndexRaw = signal['sdpMLineIndex'];
+      final sdpMid = sdpMidRaw == null ? null : '$sdpMidRaw';
+      final sdpMLineIndex = sdpMLineIndexRaw is int
+          ? sdpMLineIndexRaw
+          : int.tryParse('$sdpMLineIndexRaw');
+      await _webRtcManager.addRemoteCandidate(
+        candidate: candidate,
+        sdpMid: sdpMid,
+        sdpMLineIndex: sdpMLineIndex,
+      );
+      return;
+    }
+
+    if (signalType == 'hangup' || signalType == 'ended') {
+      await _webRtcManager.endPeerConnection();
+      _activeCallId = '';
+      _stopCallLifecycle(resetState: true);
+      _markAction(
+        'WebRTC call ended by signal: type=$signalType callId=$callId',
+      );
+      notifyListeners();
+      return;
+    }
+
+    _markAction('WebRTC signal received: type=$signalType callId=$callId');
   }
 
   void _pulseDoorUnlock() {
@@ -494,6 +670,7 @@ class EmulatorController extends ChangeNotifier {
     if (resetState) {
       _callState = IntercomCallState.idle;
       _clearDialedApartment();
+      _activeCallId = '';
     }
   }
 
