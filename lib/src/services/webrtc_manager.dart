@@ -241,8 +241,10 @@ class WebRtcManager {
         .split('\n')
         .map((line) => line.trimRight())
         .where((line) => line.isNotEmpty)
-        .where((line) =>
-            !line.startsWith('a=ssrc:') && !line.startsWith('a=ssrc-group:'))
+        .where(
+          (line) =>
+              !line.startsWith('a=ssrc:') && !line.startsWith('a=ssrc-group:'),
+        )
         .toList(growable: false);
 
     return '${filteredLines.join('\r\n')}\r\n';
