@@ -4,6 +4,7 @@ class WebRtcManager {
   MediaStream? _localStream;
   RTCVideoRenderer? _localRenderer;
   RTCPeerConnection? _peerConnection;
+  final List<RTCIceCandidate> _pendingRemoteIce = <RTCIceCandidate>[];
 
   bool get isInitialized => _localStream != null;
   RTCVideoRenderer? get localRenderer => _localRenderer;
@@ -74,12 +75,20 @@ class WebRtcManager {
       throw StateError('PeerConnection is not initialized');
     }
 
-    await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+    final applied = await _applyRemoteDescriptionWithFallback(
+      type: 'offer',
+      sdp: sdp,
+    );
+    if (!applied) {
+      throw StateError('Unable to apply remote offer');
+    }
+
     final answer = await pc.createAnswer(<String, dynamic>{
       'offerToReceiveAudio': 1,
       'offerToReceiveVideo': 0,
     });
     await pc.setLocalDescription(answer);
+    await _flushPendingRemoteIce();
     return <String, dynamic>{'type': answer.type, 'sdp': answer.sdp};
   }
 
@@ -89,7 +98,14 @@ class WebRtcManager {
       throw StateError('PeerConnection is not initialized');
     }
 
-    await pc.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+    final applied = await _applyRemoteDescriptionWithFallback(
+      type: 'answer',
+      sdp: sdp,
+    );
+    if (!applied) {
+      throw StateError('Unable to apply remote answer');
+    }
+    await _flushPendingRemoteIce();
   }
 
   Future<void> addRemoteCandidate({
@@ -102,12 +118,19 @@ class WebRtcManager {
       throw StateError('PeerConnection is not initialized');
     }
 
-    await pc.addCandidate(RTCIceCandidate(candidate, sdpMid, sdpMLineIndex));
+    final next = RTCIceCandidate(candidate, sdpMid, sdpMLineIndex);
+    if (!await _hasRemoteDescription()) {
+      _pendingRemoteIce.add(next);
+      return;
+    }
+
+    await pc.addCandidate(next);
   }
 
   Future<void> endPeerConnection() async {
     final pc = _peerConnection;
     _peerConnection = null;
+    _pendingRemoteIce.clear();
     if (pc == null) {
       return;
     }
@@ -153,5 +176,75 @@ class WebRtcManager {
       await track.stop();
     }
     await stream.dispose();
+  }
+
+  Future<bool> _hasRemoteDescription() async {
+    final pc = _peerConnection;
+    if (pc == null) return false;
+    try {
+      final remote = await pc.getRemoteDescription();
+      return remote != null && (remote.sdp ?? '').trim().isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _flushPendingRemoteIce() async {
+    final pc = _peerConnection;
+    if (pc == null || _pendingRemoteIce.isEmpty) {
+      return;
+    }
+
+    final toApply = List<RTCIceCandidate>.from(_pendingRemoteIce);
+    _pendingRemoteIce.clear();
+    for (final item in toApply) {
+      await pc.addCandidate(item);
+    }
+  }
+
+  Future<bool> _applyRemoteDescriptionWithFallback({
+    required String type,
+    required String sdp,
+  }) async {
+    final pc = _peerConnection;
+    if (pc == null) {
+      return false;
+    }
+
+    try {
+      await pc.setRemoteDescription(RTCSessionDescription(sdp, type));
+      return true;
+    } catch (_) {
+      // Retry with normalized SDP for compatibility with strict parsers.
+    }
+
+    final normalizedSdp = _normalizeRemoteSdp(sdp);
+    if (normalizedSdp == sdp) {
+      return false;
+    }
+
+    try {
+      await pc.setRemoteDescription(RTCSessionDescription(normalizedSdp, type));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String _normalizeRemoteSdp(String sdp) {
+    final noNulls = sdp.replaceAll('\u0000', '');
+    final normalizedNewlines = noNulls
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n');
+
+    final filteredLines = normalizedNewlines
+        .split('\n')
+        .map((line) => line.trimRight())
+        .where((line) => line.isNotEmpty)
+        .where((line) =>
+            !line.startsWith('a=ssrc:') && !line.startsWith('a=ssrc-group:'))
+        .toList(growable: false);
+
+    return '${filteredLines.join('\r\n')}\r\n';
   }
 }

@@ -501,24 +501,8 @@ class EmulatorController extends ChangeNotifier {
     await _ensurePeerForCall(callId: callId, iceServers: iceServers);
 
     if (signalType == 'app_accept') {
-      final offer = await _webRtcManager.createOffer();
-      final sent = _client.sendEvent(
-        eventType: 'intercom_webrtc_signal',
-        body: <String, dynamic>{
-          'call_id': callId,
-          'signal_type': 'offer',
-          'signal': <String, dynamic>{
-            ...offer,
-            'ice_servers': _activeIceServers,
-          },
-          'device_id': _config.serial.trim(),
-        },
-      );
-      _markAction(
-        sent
-            ? 'WebRTC offer sent callId=$callId'
-            : 'WebRTC offer skipped (offline) callId=$callId',
-      );
+      // App side is the offerer for this flow. Avoid glare by waiting for offer.
+      _markAction('App accepted call; waiting for WebRTC offer callId=$callId');
       return;
     }
 
@@ -529,7 +513,16 @@ class EmulatorController extends ChangeNotifier {
         return;
       }
 
-      final answer = await _webRtcManager.createAnswerForOffer(sdp);
+      Map<String, dynamic> answer;
+      try {
+        answer = await _webRtcManager.createAnswerForOffer(sdp);
+      } catch (error) {
+        _handleWarning(
+          'Failed to create answer for offer',
+          details: 'callId=$callId error=$error',
+        );
+        return;
+      }
       final sent = _client.sendEvent(
         eventType: 'intercom_webrtc_signal',
         body: <String, dynamic>{
@@ -561,7 +554,15 @@ class EmulatorController extends ChangeNotifier {
         return;
       }
 
-      await _webRtcManager.applyAnswer(sdp);
+      try {
+        await _webRtcManager.applyAnswer(sdp);
+      } catch (error) {
+        _handleWarning(
+          'Failed to apply remote answer',
+          details: 'callId=$callId error=$error',
+        );
+        return;
+      }
       _callState = IntercomCallState.connected;
       _stopCallLifecycle(resetState: false);
       _markAction('WebRTC answer applied callId=$callId');
@@ -584,11 +585,18 @@ class EmulatorController extends ChangeNotifier {
       final sdpMLineIndex = sdpMLineIndexRaw is int
           ? sdpMLineIndexRaw
           : int.tryParse('$sdpMLineIndexRaw');
-      await _webRtcManager.addRemoteCandidate(
-        candidate: candidate,
-        sdpMid: sdpMid,
-        sdpMLineIndex: sdpMLineIndex,
-      );
+      try {
+        await _webRtcManager.addRemoteCandidate(
+          candidate: candidate,
+          sdpMid: sdpMid,
+          sdpMLineIndex: sdpMLineIndex,
+        );
+      } catch (error) {
+        _handleWarning(
+          'Failed to apply ICE candidate',
+          details: 'callId=$callId error=$error',
+        );
+      }
       return;
     }
 
