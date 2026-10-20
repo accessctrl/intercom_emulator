@@ -138,27 +138,44 @@ class _HomeScreenState extends State<HomeScreen> {
       '7',
       '8',
       '9',
-      '*',
+      'del',
       '0',
-      'backspace',
+      'call',
     ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final keypadHeight = (constraints.maxHeight * 0.20)
-          .clamp(92.0, 130.0)
-            .toDouble();
-        final previewHeight = (constraints.maxHeight -
-            (44 + 8 + keypadHeight + 8 + 40 + 8 + 20))
-            .clamp(120.0, 320.0)
-            .toDouble();
+      const keypadColumns = 3;
+      const keypadRows = 4;
+      const keypadSpacing = 6.0;
+      const keypadAspect = 2.8;
+      // Keep vertical math aligned with real paddings to avoid bottom overflow.
+      const contentVerticalPadding = 14.0; // 10 top + 4 bottom
+      const contentVerticalGaps = 22.0; // 8 + 8 + 6
+      const infoRowHeight = 44.0;
+
+      final contentWidth =
+        (constraints.maxWidth - 24).clamp(0.0, double.infinity);
+      final buttonWidth =
+        (contentWidth - (keypadColumns - 1) * keypadSpacing) /
+        keypadColumns;
+      final buttonHeight = buttonWidth / keypadAspect;
+      final keypadHeight =
+        (buttonHeight * keypadRows) + (keypadRows - 1) * keypadSpacing;
+
+      final innerHeight =
+        (constraints.maxHeight - contentVerticalPadding)
+          .clamp(0.0, double.infinity)
+          .toDouble();
+      final previewHeight = (innerHeight -
+          (keypadHeight + infoRowHeight + contentVerticalGaps))
+        .clamp(96.0, innerHeight)
+        .toDouble();
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(
-              children: <Widget>[
+          child: Column(
+            children: <Widget>[
               SizedBox(
                 height: previewHeight,
                 child: ClipRRect(
@@ -191,12 +208,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
-                        vertical: 6,
+                        vertical: 8,
                       ),
                       child: Text(
                         apartmentText,
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.headlineSmall,
+                        style: Theme.of(context).textTheme.bodyMedium,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -256,9 +273,17 @@ class _HomeScreenState extends State<HomeScreen> {
                     final key = keypad[index];
                     return _dialButton(
                       key,
+                      enabled: key != 'call' || controller.canStartCall,
                       onTap: () {
-                        if (key == 'backspace') {
+                        if (key == 'del') {
                           controller.removeLastDialCharacter();
+                        } else if (key == 'call') {
+                          controller.startCall().then((message) {
+                            if (!mounted) {
+                              return;
+                            }
+                            _showSnack(message);
+                          });
                         } else {
                           controller.appendDialCharacter(key);
                         }
@@ -267,33 +292,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                 ),
               ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(40),
-                  backgroundColor: Colors.green.shade100,
-                  foregroundColor: Colors.green.shade900,
-                ),
-                onPressed: controller.canStartCall
-                    ? () async {
-                        final message = await controller.startCall();
-                        if (!mounted) {
-                          return;
-                        }
-                        _showSnack(message);
-                      }
-                    : null,
-                icon: const Icon(Icons.call, size: 18),
-                label: const Text('Call'),
-              ),
               const SizedBox(height: 6),
-                Text(
-                  '${_callStateText(controller)} · Device ${controller.deviceLabel}',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
+            ],
           ),
         );
       },
@@ -324,16 +324,25 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _dialButton(String key, {required VoidCallback onTap}) {
-    final isBackspace = key == 'backspace';
+  Widget _dialButton(
+    String key, {
+    required VoidCallback onTap,
+    bool enabled = true,
+  }) {
+    final isDelete = key == 'del';
+    final isCall = key == 'call';
     return FilledButton.tonal(
       style: FilledButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 2),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        backgroundColor: isCall ? Colors.green.shade100 : null,
+        foregroundColor: isCall ? Colors.green.shade900 : null,
       ),
-      onPressed: onTap,
-      child: isBackspace
+      onPressed: enabled ? onTap : null,
+      child: isDelete
           ? const Icon(Icons.backspace_outlined, size: 18)
+          : isCall
+          ? const Icon(Icons.call, size: 18)
           : Text(
               key,
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),

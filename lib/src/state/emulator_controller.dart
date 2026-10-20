@@ -182,7 +182,7 @@ class EmulatorController extends ChangeNotifier {
     if (character.isEmpty) {
       return;
     }
-    if (character != '*' && int.tryParse(character) == null) {
+    if (int.tryParse(character) == null) {
       return;
     }
     if (_dialedApartment.length >= 12) {
@@ -414,15 +414,17 @@ class EmulatorController extends ChangeNotifier {
       if (_callSecondsRemaining <= 1) {
         timer.cancel();
         _ringSignalTimer?.cancel();
+        final apartment = _dialedApartment;
         _callSecondsRemaining = 0;
         _callState = IntercomCallState.idle;
         _client.sendEvent(
           eventType: 'intercom_call_timeout',
           body: <String, dynamic>{
-            'apartment': _dialedApartment,
+            'apartment': apartment,
             'device_serial': _config.serial.trim(),
           },
         );
+        _clearDialedApartment();
         _markAction('Call timeout (${_outgoingCallDurationSec}s)');
         notifyListeners();
         return;
@@ -442,7 +444,12 @@ class EmulatorController extends ChangeNotifier {
     _callSecondsRemaining = 0;
     if (resetState) {
       _callState = IntercomCallState.idle;
+      _clearDialedApartment();
     }
+  }
+
+  void _clearDialedApartment() {
+    _dialedApartment = '';
   }
 
   void _playRingingTick() {
