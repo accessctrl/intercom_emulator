@@ -52,6 +52,7 @@ class CommandEmulator {
         type == 'call_accept' ||
         type == 'audio_start' ||
         type == 'voice_start' ||
+        type == 'webrtc_signal' ||
         type == 'call_declined' ||
         type == 'call_end' ||
         type == 'hangup' ||

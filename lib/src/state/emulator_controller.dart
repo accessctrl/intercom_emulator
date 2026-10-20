@@ -347,6 +347,11 @@ class EmulatorController extends ChangeNotifier {
   Future<void> _applyRuntimeState(HubCommand command) async {
     final type = command.type.trim().toLowerCase();
 
+    if (type == 'webrtc_signal') {
+      _relayWebrtcSignal(command);
+      return;
+    }
+
     if (type == 'door_open' || type == 'unlock') {
       _pulseDoorUnlock();
       _markAction('Door unlock command received');
@@ -379,6 +384,50 @@ class EmulatorController extends ChangeNotifier {
       _markAction('Remote monitor session started');
       return;
     }
+  }
+
+  void _relayWebrtcSignal(HubCommand command) {
+    final payload = command.payload;
+    final callId =
+        '${payload['call_id'] ?? payload['callId'] ?? payload['request_id'] ?? ''}'
+            .trim();
+    final signalType =
+        '${payload['signal_type'] ?? payload['signalType'] ?? payload['type'] ?? ''}'
+            .trim()
+            .toLowerCase();
+    final rawSignal = payload['signal'];
+    final signal = rawSignal is Map
+        ? Map<String, dynamic>.from(rawSignal)
+        : <String, dynamic>{};
+
+    if (callId.isEmpty || signalType.isEmpty) {
+      _handleWarning(
+        'Ignoring invalid webrtc_signal command',
+        details: 'command=${command.id} callId=$callId signalType=$signalType',
+      );
+      return;
+    }
+
+    final sent = _client.sendEvent(
+      eventType: 'intercom_webrtc_signal',
+      body: <String, dynamic>{
+        'call_id': callId,
+        'signal_type': signalType,
+        'signal': signal,
+        'device_id': _config.serial.trim(),
+      },
+    );
+
+    if (signalType == 'offer' || signalType == 'answer') {
+      _callState = IntercomCallState.connected;
+      _stopCallLifecycle(resetState: false);
+    }
+
+    _markAction(
+      sent
+          ? 'Relayed WebRTC signal: type=$signalType callId=$callId'
+          : 'WebRTC signal relay skipped (offline): type=$signalType callId=$callId',
+    );
   }
 
   void _pulseDoorUnlock() {
