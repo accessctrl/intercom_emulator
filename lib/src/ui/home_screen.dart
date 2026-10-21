@@ -271,12 +271,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     final key = keypad[index];
                     return _dialButton(
                       key,
-                      enabled: key != 'call' || controller.canStartCall,
+                      enabled: key == 'call'
+                          ? (controller.canStartCall ||
+                                controller.canCancelCall)
+                          : true,
+                      callIsActive: controller.canCancelCall,
                       onTap: () {
                         if (key == 'del') {
-                          controller.removeLastDialCharacter();
+                          controller.clearDialedApartment();
                         } else if (key == 'call') {
-                          controller.startCall().then((message) {
+                          final action = controller.canCancelCall
+                              ? controller.cancelCurrentCall()
+                              : controller.startCall();
+                          action.then((message) {
                             if (!mounted) {
                               return;
                             }
@@ -323,6 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
     String key, {
     required VoidCallback onTap,
     bool enabled = true,
+    bool callIsActive = false,
   }) {
     final isDelete = key == 'del';
     final isCall = key == 'call';
@@ -330,14 +338,18 @@ class _HomeScreenState extends State<HomeScreen> {
       style: FilledButton.styleFrom(
         padding: const EdgeInsets.symmetric(vertical: 2),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        backgroundColor: isCall ? Colors.green.shade100 : null,
-        foregroundColor: isCall ? Colors.green.shade900 : null,
+        backgroundColor: isCall
+            ? (callIsActive ? Colors.red.shade100 : Colors.green.shade100)
+            : null,
+        foregroundColor: isCall
+            ? (callIsActive ? Colors.red.shade900 : Colors.green.shade900)
+            : null,
       ),
       onPressed: enabled ? onTap : null,
       child: isDelete
-          ? const Icon(Icons.backspace_outlined, size: 18)
+          ? const Icon(Icons.clear_all, size: 18)
           : isCall
-          ? const Icon(Icons.call, size: 18)
+          ? Icon(callIsActive ? Icons.call_end : Icons.call, size: 18)
           : Text(
               key,
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),

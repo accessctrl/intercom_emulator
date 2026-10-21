@@ -92,6 +92,7 @@ class EmulatorController extends ChangeNotifier {
 
   bool get canStartCall =>
       _dialedApartment.isNotEmpty && _callState == IntercomCallState.idle;
+  bool get canCancelCall => _callState != IntercomCallState.idle;
 
   String get deviceLabel {
     final serial = _config.serial.trim();
@@ -224,6 +225,19 @@ class EmulatorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearDialedApartment() {
+    if (_callState != IntercomCallState.idle) {
+      return;
+    }
+    if (_dialedApartment.isEmpty) {
+      return;
+    }
+
+    _clearDialedApartment();
+    _markAction('Apartment number cleared');
+    notifyListeners();
+  }
+
   Future<String> startCall() async {
     if (!canStartCall) {
       final reason = _dialedApartment.isEmpty
@@ -241,6 +255,10 @@ class EmulatorController extends ChangeNotifier {
       return _lastActionMessage;
     }
 
+    // Ensure a clean peer state for every new outgoing call.
+    await _webRtcManager.endPeerConnection();
+    _activeCallId = '';
+
     _callState = IntercomCallState.calling;
     _startCallLifecycle();
 
@@ -256,6 +274,41 @@ class EmulatorController extends ChangeNotifier {
         ? 'Call started for apartment $_dialedApartment'
         : 'Call prepared for apartment $_dialedApartment (offline websocket)';
     _markAction(message);
+    notifyListeners();
+    return _lastActionMessage;
+  }
+
+  Future<String> cancelCurrentCall() async {
+    if (_callState == IntercomCallState.idle) {
+      return _lastActionMessage;
+    }
+
+    final callId = _activeCallId;
+    if (callId.isNotEmpty) {
+      _client.sendEvent(
+        eventType: 'intercom_webrtc_signal',
+        body: <String, dynamic>{
+          'call_id': callId,
+          'signal_type': 'hangup',
+          'signal': const <String, dynamic>{'reason': 'cancel'},
+          'device_id': _config.serial.trim(),
+        },
+      );
+    }
+
+    _client.sendEvent(
+      eventType: 'intercom_call_end',
+      body: <String, dynamic>{
+        'call_id': callId,
+        'reason': 'cancel',
+        'device_serial': _config.serial.trim(),
+      },
+    );
+
+    await _webRtcManager.endPeerConnection();
+    _activeCallId = '';
+    _stopCallLifecycle(resetState: true);
+    _markAction('Call canceled by emulator user');
     notifyListeners();
     return _lastActionMessage;
   }
@@ -498,6 +551,18 @@ class EmulatorController extends ChangeNotifier {
       return;
     }
 
+    if (signalType == 'unlock') {
+      _pulseDoorUnlock();
+      _markAction('Door unlock signal received callId=$callId');
+      return;
+    }
+
+    if (signalType == 'offer') {
+      // Always reset peer before handling a new offer to avoid stale failed ICE.
+      await _webRtcManager.endPeerConnection();
+      _activeCallId = '';
+    }
+
     await _ensurePeerForCall(callId: callId, iceServers: iceServers);
 
     if (signalType == 'app_accept') {
@@ -638,7 +703,7 @@ class EmulatorController extends ChangeNotifier {
       }
     });
 
-    _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (_callState != IntercomCallState.calling) {
         timer.cancel();
         return;
@@ -657,6 +722,8 @@ class EmulatorController extends ChangeNotifier {
             'device_serial': _config.serial.trim(),
           },
         );
+        await _webRtcManager.endPeerConnection();
+        _activeCallId = '';
         _clearDialedApartment();
         _markAction('Call timeout (${_outgoingCallDurationSec}s)');
         notifyListeners();
