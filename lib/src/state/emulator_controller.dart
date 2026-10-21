@@ -420,7 +420,15 @@ class EmulatorController extends ChangeNotifier {
       details: '${command.type} id=${command.id}',
     );
 
-    await _applyRuntimeState(command);
+    try {
+      await _applyRuntimeState(command);
+    } catch (error, stack) {
+      _handleWarning(
+        'Runtime state handler failed',
+        details: 'command=${command.id} type=${command.type} error=$error',
+      );
+      _logger.warning('Runtime state stacktrace', details: stack.toString());
+    }
 
     final result = await _commandEmulator.execute(command);
     if (result.status == 'unsupported') {

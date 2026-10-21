@@ -4,6 +4,7 @@ class WebRtcManager {
   MediaStream? _localStream;
   RTCVideoRenderer? _localRenderer;
   RTCPeerConnection? _peerConnection;
+  Future<void>? _ensurePeerFuture;
   final List<RTCIceCandidate> _pendingRemoteIce = <RTCIceCandidate>[];
 
   bool get isInitialized => _localStream != null;
@@ -17,6 +18,38 @@ class WebRtcManager {
   }) async {
     await initializePreview();
 
+    if (_peerConnection != null) {
+      return;
+    }
+
+    final inFlight = _ensurePeerFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+
+    final createFuture = _createPeerConnection(
+      iceServers: iceServers,
+      onCandidate: onCandidate,
+      onConnectionState: onConnectionState,
+      onIceConnectionState: onIceConnectionState,
+    );
+    _ensurePeerFuture = createFuture;
+    try {
+      await createFuture;
+    } finally {
+      if (identical(_ensurePeerFuture, createFuture)) {
+        _ensurePeerFuture = null;
+      }
+    }
+  }
+
+  Future<void> _createPeerConnection({
+    required List<Map<String, dynamic>> iceServers,
+    required Future<void> Function(Map<String, dynamic> candidate) onCandidate,
+    required void Function(RTCPeerConnectionState state) onConnectionState,
+    required void Function(RTCIceConnectionState state) onIceConnectionState,
+  }) async {
     if (_peerConnection != null) {
       return;
     }
@@ -35,7 +68,7 @@ class WebRtcManager {
     );
 
     for (final track in _localStream!.getTracks()) {
-      await _peerConnection!.addTrack(track, _localStream!);
+      await _addTrackIfMissing(_peerConnection!, track, _localStream!);
     }
 
     _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
@@ -52,6 +85,28 @@ class WebRtcManager {
 
     _peerConnection!.onConnectionState = onConnectionState;
     _peerConnection!.onIceConnectionState = onIceConnectionState;
+  }
+
+  Future<void> _addTrackIfMissing(
+    RTCPeerConnection pc,
+    MediaStreamTrack track,
+    MediaStream stream,
+  ) async {
+    final senders = await pc.getSenders();
+    final alreadyAdded = senders.any((sender) => sender.track?.id == track.id);
+    if (alreadyAdded) {
+      return;
+    }
+
+    try {
+      await pc.addTrack(track, stream);
+    } catch (error) {
+      final message = '$error';
+      if (message.contains('Sender already exists')) {
+        return;
+      }
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> createOffer() async {
