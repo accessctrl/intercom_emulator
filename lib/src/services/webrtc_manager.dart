@@ -62,7 +62,7 @@ class WebRtcManager {
 
     final offer = await pc.createOffer(<String, dynamic>{
       'offerToReceiveAudio': 1,
-      'offerToReceiveVideo': 0,
+      'offerToReceiveVideo': 1,
       'voiceActivityDetection': true,
     });
     await pc.setLocalDescription(offer);
@@ -85,7 +85,7 @@ class WebRtcManager {
 
     final answer = await pc.createAnswer(<String, dynamic>{
       'offerToReceiveAudio': 1,
-      'offerToReceiveVideo': 0,
+      'offerToReceiveVideo': 1,
     });
     await pc.setLocalDescription(answer);
     await _flushPendingRemoteIce();
