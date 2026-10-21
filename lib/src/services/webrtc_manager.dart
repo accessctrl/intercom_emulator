@@ -241,6 +241,8 @@ class WebRtcManager {
         .split('\n')
         .map((line) => line.trimRight())
         .where((line) => line.isNotEmpty)
+        .map(_normalizeSdpLine)
+        .where((line) => line.isNotEmpty)
         .where(
           (line) =>
               !line.startsWith('a=ssrc:') && !line.startsWith('a=ssrc-group:'),
@@ -248,5 +250,28 @@ class WebRtcManager {
         .toList(growable: false);
 
     return '${filteredLines.join('\r\n')}\r\n';
+  }
+
+  String _normalizeSdpLine(String line) {
+    if (line.startsWith('m=video ')) {
+      final parts = line.split(' ');
+      if (parts.length > 3) {
+        final header = parts.sublist(0, 3);
+        final payloads = parts
+            .sublist(3)
+            .where((pt) => pt != '107' && pt != '45')
+            .toList(growable: false);
+        return <String>[...header, ...payloads].join(' ');
+      }
+    }
+
+    if (line.startsWith('a=rtpmap:107 ulpfec/90000') ||
+        line.startsWith('a=rtpmap:45 flexfec-03/90000') ||
+        line.startsWith('a=rtcp-fb:45 ') ||
+        line.startsWith('a=fmtp:45 ')) {
+      return '';
+    }
+
+    return line;
   }
 }
