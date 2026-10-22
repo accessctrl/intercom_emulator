@@ -81,6 +81,7 @@ class EmulatorController extends ChangeNotifier {
   Timer? _doorUnlockTimer;
   Timer? _callTimer;
   Timer? _ringSignalTimer;
+  final Set<String> _snapshotEmittedCallIds = <String>{};
 
   int _callSecondsRemaining = 0;
   int get callSecondsRemaining => _callSecondsRemaining;
@@ -260,16 +261,24 @@ class EmulatorController extends ChangeNotifier {
     await _webRtcManager.endPeerConnection();
     _activeCallId = '';
 
+    final callId =
+      'call-${DateTime.now().millisecondsSinceEpoch}-${_config.serial.trim()}-$_dialedApartment';
+    _activeCallId = callId;
+
     _callState = IntercomCallState.calling;
     _startCallLifecycle();
 
     final sent = _client.sendEvent(
       eventType: 'intercom_call_start',
       body: <String, dynamic>{
+        'call_id': callId,
         'apartment': _dialedApartment,
         'device_serial': _config.serial.trim(),
       },
     );
+
+    // Snapshot must be captured at dial/start time even if nobody answers.
+    unawaited(_emitSnapshotAtCallStart(callId));
 
     final message = sent
         ? 'Call started for apartment $_dialedApartment'
@@ -277,6 +286,22 @@ class EmulatorController extends ChangeNotifier {
     _markAction(message);
     notifyListeners();
     return _lastActionMessage;
+  }
+
+  Future<void> _emitSnapshotAtCallStart(String callId) async {
+    final normalizedCallId = callId.trim();
+    if (normalizedCallId.isEmpty) {
+      return;
+    }
+
+    await _emitSnapshotForCall(normalizedCallId);
+
+    // Retry once to reduce race risk if backend session insert lags behind.
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    if (_activeCallId.trim() != normalizedCallId) {
+      return;
+    }
+    await _emitSnapshotForCall(normalizedCallId);
   }
 
   Future<String> cancelCurrentCall() async {
@@ -544,21 +569,26 @@ class EmulatorController extends ChangeNotifier {
 
   Future<void> _emitSnapshotForCall(String callId) async {
     final serial = _config.serial.trim();
-    if (serial.isEmpty || callId.trim().isEmpty) {
+    final normalizedCallId = callId.trim();
+    if (serial.isEmpty || normalizedCallId.isEmpty) {
+      return;
+    }
+
+    if (_snapshotEmittedCallIds.contains(normalizedCallId)) {
       return;
     }
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final seed = base64Url.encode(utf8.encode('$serial:$callId:$nowMs'));
+    final seed = base64Url.encode(utf8.encode('$serial:$normalizedCallId:$nowMs'));
     final previewUrl =
-        'https://snapshot.local/intercom/$serial/$callId/preview.jpg?s=$seed';
+        'https://snapshot.local/intercom/$serial/$normalizedCallId/preview.jpg?s=$seed';
     final fullUrl =
-        'https://snapshot.local/intercom/$serial/$callId/full.jpg?s=$seed';
+        'https://snapshot.local/intercom/$serial/$normalizedCallId/full.jpg?s=$seed';
 
     final sent = _client.sendEvent(
       eventType: 'intercom_snapshot',
       body: <String, dynamic>{
-        'call_id': callId,
+        'call_id': normalizedCallId,
         'preview_url': previewUrl,
         'full_url': fullUrl,
         'device_serial': serial,
@@ -566,14 +596,15 @@ class EmulatorController extends ChangeNotifier {
     );
 
     if (sent) {
+      _snapshotEmittedCallIds.add(normalizedCallId);
       _handleInfo(
         'Snapshot event emitted',
-        details: 'callId=$callId serial=$serial',
+        details: 'callId=$normalizedCallId serial=$serial',
       );
     } else {
       _handleWarning(
         'Snapshot event skipped',
-        details: 'offline websocket callId=$callId',
+        details: 'offline websocket callId=$normalizedCallId',
       );
     }
   }
