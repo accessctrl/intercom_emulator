@@ -629,7 +629,9 @@ class EmulatorController extends ChangeNotifier {
         return null;
       }
 
-      final url = Uri.parse('${_config.baseUrl.trim()}/api/intercom/runtime/snapshot');
+      final url = Uri.parse(
+        '${_config.baseUrl.trim()}/api/intercom/runtime/snapshot',
+      );
       final req = await HttpClient().postUrl(url);
       req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       req.add(
