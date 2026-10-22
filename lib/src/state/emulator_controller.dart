@@ -262,7 +262,7 @@ class EmulatorController extends ChangeNotifier {
     _activeCallId = '';
 
     final callId =
-      'call-${DateTime.now().millisecondsSinceEpoch}-${_config.serial.trim()}-$_dialedApartment';
+        'call-${DateTime.now().millisecondsSinceEpoch}-${_config.serial.trim()}-$_dialedApartment';
     _activeCallId = callId;
 
     _callState = IntercomCallState.calling;
@@ -579,7 +579,9 @@ class EmulatorController extends ChangeNotifier {
     }
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final seed = base64Url.encode(utf8.encode('$serial:$normalizedCallId:$nowMs'));
+    final seed = base64Url.encode(
+      utf8.encode('$serial:$normalizedCallId:$nowMs'),
+    );
     final previewUrl =
         'https://snapshot.local/intercom/$serial/$normalizedCallId/preview.jpg?s=$seed';
     final fullUrl =
