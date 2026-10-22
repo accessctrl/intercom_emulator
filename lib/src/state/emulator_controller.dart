@@ -267,13 +267,11 @@ class EmulatorController extends ChangeNotifier {
 
     final serial = _config.serial.trim();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final seed = base64Url.encode(
-      utf8.encode('$serial:$callId:$nowMs'),
-    );
+    final seed = base64Url.encode(utf8.encode('$serial:$callId:$nowMs'));
     final previewUrl =
-      'https://snapshot.local/intercom/$serial/$callId/preview.jpg?s=$seed';
+        'https://snapshot.local/intercom/$serial/$callId/preview.jpg?s=$seed';
     final fullUrl =
-      'https://snapshot.local/intercom/$serial/$callId/full.jpg?s=$seed';
+        'https://snapshot.local/intercom/$serial/$callId/full.jpg?s=$seed';
 
     _callState = IntercomCallState.calling;
     _startCallLifecycle();
