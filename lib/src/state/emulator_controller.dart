@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -525,8 +526,55 @@ class EmulatorController extends ChangeNotifier {
 
     if (type == 'monitor_start' || type == 'view_start') {
       await initializeLocalMedia();
-      _markAction('Remote monitor session started');
+      final payload = command.payload;
+      final callId =
+          '${payload['call_id'] ?? payload['callId'] ?? payload['request_id'] ?? ''}'
+              .trim();
+      if (callId.isNotEmpty) {
+        await _emitSnapshotForCall(callId);
+      }
+      _markAction(
+        callId.isEmpty
+            ? 'Remote monitor session started'
+            : 'Remote monitor session started callId=$callId',
+      );
       return;
+    }
+  }
+
+  Future<void> _emitSnapshotForCall(String callId) async {
+    final serial = _config.serial.trim();
+    if (serial.isEmpty || callId.trim().isEmpty) {
+      return;
+    }
+
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final seed = base64Url.encode(utf8.encode('$serial:$callId:$nowMs'));
+    final previewUrl =
+        'https://snapshot.local/intercom/$serial/$callId/preview.jpg?s=$seed';
+    final fullUrl =
+        'https://snapshot.local/intercom/$serial/$callId/full.jpg?s=$seed';
+
+    final sent = _client.sendEvent(
+      eventType: 'intercom_snapshot',
+      body: <String, dynamic>{
+        'call_id': callId,
+        'preview_url': previewUrl,
+        'full_url': fullUrl,
+        'device_serial': serial,
+      },
+    );
+
+    if (sent) {
+      _handleInfo(
+        'Snapshot event emitted',
+        details: 'callId=$callId serial=$serial',
+      );
+    } else {
+      _handleWarning(
+        'Snapshot event skipped',
+        details: 'offline websocket callId=$callId',
+      );
     }
   }
 
