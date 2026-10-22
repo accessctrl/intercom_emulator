@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -265,14 +266,6 @@ class EmulatorController extends ChangeNotifier {
         'call-${DateTime.now().millisecondsSinceEpoch}-${_config.serial.trim()}-$_dialedApartment';
     _activeCallId = callId;
 
-    final serial = _config.serial.trim();
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final seed = base64Url.encode(utf8.encode('$serial:$callId:$nowMs'));
-    final previewUrl =
-        'https://snapshot.local/intercom/$serial/$callId/preview.jpg?s=$seed';
-    final fullUrl =
-        'https://snapshot.local/intercom/$serial/$callId/full.jpg?s=$seed';
-
     _callState = IntercomCallState.calling;
     _startCallLifecycle();
 
@@ -282,8 +275,6 @@ class EmulatorController extends ChangeNotifier {
         'call_id': callId,
         'apartment': _dialedApartment,
         'device_serial': _config.serial.trim(),
-        'preview_url': previewUrl,
-        'full_url': fullUrl,
       },
     );
 
@@ -588,21 +579,21 @@ class EmulatorController extends ChangeNotifier {
       return;
     }
 
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final seed = base64Url.encode(
-      utf8.encode('$serial:$normalizedCallId:$nowMs'),
-    );
-    final previewUrl =
-        'https://snapshot.local/intercom/$serial/$normalizedCallId/preview.jpg?s=$seed';
-    final fullUrl =
-        'https://snapshot.local/intercom/$serial/$normalizedCallId/full.jpg?s=$seed';
+    final uploaded = await _uploadSnapshotForCall(normalizedCallId);
+    if (uploaded == null) {
+      _handleWarning(
+        'Snapshot upload failed',
+        details: 'callId=$normalizedCallId serial=$serial',
+      );
+      return;
+    }
 
     final sent = _client.sendEvent(
       eventType: 'intercom_snapshot',
       body: <String, dynamic>{
         'call_id': normalizedCallId,
-        'preview_url': previewUrl,
-        'full_url': fullUrl,
+        'preview_key': uploaded.previewKey,
+        'full_key': uploaded.fullKey,
         'device_serial': serial,
       },
     );
@@ -618,6 +609,70 @@ class EmulatorController extends ChangeNotifier {
         'Snapshot event skipped',
         details: 'offline websocket callId=$normalizedCallId',
       );
+    }
+  }
+
+  Future<_SnapshotUploadResult?> _uploadSnapshotForCall(String callId) async {
+    final track = _webRtcManager.localVideoTrack;
+    if (track == null) {
+      _handleWarning(
+        'Snapshot upload skipped: local video track is unavailable',
+        details: 'callId=$callId',
+      );
+      return null;
+    }
+
+    try {
+      final frame = await track.captureFrame();
+      final bytes = frame.asUint8List();
+      if (bytes.isEmpty) {
+        return null;
+      }
+
+      final url = Uri.parse('${_config.baseUrl.trim()}/api/intercom/runtime/snapshot');
+      final req = await HttpClient().postUrl(url);
+      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      req.add(
+        utf8.encode(
+          jsonEncode(<String, dynamic>{
+            'call_id': callId,
+            'device_serial': _config.serial.trim(),
+            'snapshot_base64': base64Encode(bytes),
+          }),
+        ),
+      );
+
+      final response = await req.close();
+      final body = await utf8.decodeStream(response);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _handleWarning(
+          'Snapshot upload rejected by backend',
+          details: 'callId=$callId status=${response.statusCode} body=$body',
+        );
+        return null;
+      }
+
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) {
+        return null;
+      }
+
+      final previewKey = '${decoded['preview_key'] ?? ''}'.trim();
+      final fullKey = '${decoded['full_key'] ?? ''}'.trim();
+      if (previewKey.isEmpty && fullKey.isEmpty) {
+        return null;
+      }
+
+      return _SnapshotUploadResult(
+        previewKey: previewKey,
+        fullKey: fullKey.isEmpty ? previewKey : fullKey,
+      );
+    } catch (error) {
+      _handleWarning(
+        'Snapshot upload error',
+        details: 'callId=$callId error=$error',
+      );
+      return null;
     }
   }
 
@@ -889,4 +944,14 @@ class EmulatorController extends ChangeNotifier {
     _logger.dispose();
     super.dispose();
   }
+}
+
+class _SnapshotUploadResult {
+  const _SnapshotUploadResult({
+    required this.previewKey,
+    required this.fullKey,
+  });
+
+  final String previewKey;
+  final String fullKey;
 }

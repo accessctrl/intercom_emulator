@@ -9,6 +9,17 @@ class WebRtcManager {
 
   bool get isInitialized => _localStream != null;
   RTCVideoRenderer? get localRenderer => _localRenderer;
+  MediaStreamTrack? get localVideoTrack {
+    final stream = _localStream;
+    if (stream == null) {
+      return null;
+    }
+    final tracks = stream.getVideoTracks();
+    if (tracks.isEmpty) {
+      return null;
+    }
+    return tracks.first;
+  }
 
   Future<void> ensurePeerConnection({
     required List<Map<String, dynamic>> iceServers,
