@@ -265,6 +265,16 @@ class EmulatorController extends ChangeNotifier {
         'call-${DateTime.now().millisecondsSinceEpoch}-${_config.serial.trim()}-$_dialedApartment';
     _activeCallId = callId;
 
+    final serial = _config.serial.trim();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final seed = base64Url.encode(
+      utf8.encode('$serial:$callId:$nowMs'),
+    );
+    final previewUrl =
+      'https://snapshot.local/intercom/$serial/$callId/preview.jpg?s=$seed';
+    final fullUrl =
+      'https://snapshot.local/intercom/$serial/$callId/full.jpg?s=$seed';
+
     _callState = IntercomCallState.calling;
     _startCallLifecycle();
 
@@ -274,6 +284,8 @@ class EmulatorController extends ChangeNotifier {
         'call_id': callId,
         'apartment': _dialedApartment,
         'device_serial': _config.serial.trim(),
+        'preview_url': previewUrl,
+        'full_url': fullUrl,
       },
     );
 
