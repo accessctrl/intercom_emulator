@@ -34,6 +34,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _statusIntervalController = TextEditingController(
       text: cfg.statusIntervalSec.toString(),
     );
+
+    // Auto-connect once UI is mounted so emulator is ready immediately.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      if (!widget.controller.isConnected &&
+          widget.controller.connectionState != HubConnectionState.connecting) {
+        widget.controller.connect();
+      }
+    });
   }
 
   @override
@@ -58,11 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
             actions: <Widget>[
               TextButton.icon(
                 onPressed: () async {
-                  final message = await controller.toggleConnection();
-                  if (!mounted) {
-                    return;
-                  }
-                  _showSnack(message);
+                  await controller.toggleConnection();
                 },
                 icon: Icon(
                   Icons.wifi,
@@ -283,12 +290,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           final action = controller.canCancelCall
                               ? controller.cancelCurrentCall()
                               : controller.startCall();
-                          action.then((message) {
-                            if (!mounted) {
-                              return;
-                            }
-                            _showSnack(message);
-                          });
+                          action.ignore();
                         } else {
                           controller.appendDialCharacter(key);
                         }
@@ -444,11 +446,6 @@ class _HomeScreenState extends State<HomeScreen> {
               statusIntervalSec: interval,
             );
             await controller.saveConfig(cfg);
-            if (!mounted) {
-              return;
-            }
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('Settings saved')));
           },
           child: const Text('Save Settings'),
         ),
@@ -548,11 +545,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
-  }
-
-  void _showSnack(String message) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   String _levelText(LogLevel level) {
